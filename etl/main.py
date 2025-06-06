@@ -124,6 +124,8 @@ class DataTransformer:
         logging.info("Transformação dos dados concluída.")
         return df
 
+from sqlalchemy.orm import sessionmaker
+
 class DataLoader:
     """
     Classe responsável por carregar os dados transformados no banco PostgreSQL.
@@ -135,26 +137,99 @@ class DataLoader:
         self.engine = create_engine(self.conn_str)
         logging.info(f"Conectado ao banco de dados: {db} no host: {host}")
 
+    def get_or_create_dim_ids(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Resolve os IDs das dimensões e retorna um DataFrame pronto para carga na fato.
+        """
+        Session = sessionmaker(bind=self.engine)
+        session = Session()
+
+        # Prepare lists for IDs
+        id_tempo_list = []
+        id_servico_list = []
+        id_grupo_list = []
+
+        for _, row in df.iterrows():
+            # dim_tempo
+            ano, mes = int(row['Ano']), int(row['Mês'])
+            res = session.execute(
+                text("SELECT id_tempo FROM ida_datamart.dim_tempo WHERE ano=:ano AND mes=:mes"),
+                {"ano": ano, "mes": mes}
+            ).fetchone()
+            if res:
+                id_tempo = res[0]
+            else:
+                res = session.execute(
+                    text("INSERT INTO ida_datamart.dim_tempo (ano, mes, data_completa) VALUES (:ano, :mes, make_date(:ano, :mes, 1)) RETURNING id_tempo"),
+                    {"ano": ano, "mes": mes}
+                ).fetchone()
+                session.commit()
+                id_tempo = res[0]
+            id_tempo_list.append(id_tempo)
+
+            # dim_servico
+            servico = row['Servico']
+            res = session.execute(
+                text("SELECT id_servico FROM ida_datamart.dim_servico WHERE nome_servico ILIKE :servico"),
+                {"servico": f"%{servico}%"}
+            ).fetchone()
+            if res:
+                id_servico = res[0]
+            else:
+                res = session.execute(
+                    text("INSERT INTO ida_datamart.dim_servico (nome_servico) VALUES (:servico) RETURNING id_servico"),
+                    {"servico": servico}
+                ).fetchone()
+                session.commit()
+                id_servico = res[0]
+            id_servico_list.append(id_servico)
+
+            # dim_grupo_economico
+            grupo = row['Grupo Econômico']
+            res = session.execute(
+                text("SELECT id_grupo_economico FROM ida_datamart.dim_grupo_economico WHERE nome_grupo_economico=:grupo"),
+                {"grupo": grupo}
+            ).fetchone()
+            if res:
+                id_grupo = res[0]
+            else:
+                res = session.execute(
+                    text("INSERT INTO ida_datamart.dim_grupo_economico (nome_grupo_economico) VALUES (:grupo) RETURNING id_grupo_economico"),
+                    {"grupo": grupo}
+                ).fetchone()
+                session.commit()
+                id_grupo = res[0]
+            id_grupo_list.append(id_grupo)
+
+        session.close()
+
+        # Build new DataFrame for fact table
+        fact_df = pd.DataFrame({
+            "id_tempo": id_tempo_list,
+            "id_servico": id_servico_list,
+            "id_grupo_economico": id_grupo_list,
+            "taxa_resolvidas_5_dias_uteis": df["Taxa de Resolvidas em 5 dias úteis"].values,
+            "total_demandas": df["Total de Demandas"].values,
+            "total_resolvidas": df["Total Resolvidas"].values,
+            "total_nao_resolvidas": df["Total Não Resolvidas"].values
+        })
+        return fact_df
+    
     def load_data(self, df: pd.DataFrame, service_name: str):
-        """
-        Carrega os dados transformados na tabela fato_atendimento.
-        Args:
-            df (pd.DataFrame): DataFrame com os dados transformados.
-            service_name (str): Nome do serviço (SMP, STFC, SCM).
-        """
         if df.empty:
             logging.warning(f"Nenhum dado para carregar para o serviço {service_name}.")
             return
 
-        # Adiciona coluna de serviço
         df['Servico'] = service_name
 
-        # Define o nome da tabela e o schema
-        table_name = 'fato_atendimento'
-        schema = 'ida_datamart'
+        # Resolve dimension IDs
+        fact_df = self.get_or_create_dim_ids(df)
+
+    table_name = 'fato_desempenho_atendimento'
+    schema = 'ida_datamart'
 
         try:
-            df.to_sql(
+            fact_df.to_sql(
                 table_name,
                 self.engine,
                 schema=schema,
@@ -162,7 +237,7 @@ class DataLoader:
                 index=False,
                 method='multi'
             )
-            logging.info(f"{len(df)} linhas carregadas na tabela {schema}.{table_name} para o serviço {service_name}.")
+            logging.info(f"{len(fact_df)} linhas carregadas na tabela {schema}.{table_name} para o serviço {service_name}.")
         except Exception as e:
             logging.error(f"Erro ao carregar dados para {service_name}: {e}")
             raise
