@@ -1,0 +1,40 @@
+
+services:
+  db:
+    image: postgres:17.5-bookworm
+    container_name: ida_postgres
+    environment:
+      POSTGRES_DB: ida_datamart
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d ida_datamart"]
+      interval: 10s
+      timeout: 30s
+      retries: 20
+
+  etl:
+    build:
+      context: ./etl
+      dockerfile: Dockerfile
+    container_name: ida_etl
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_NAME: ida_datamart
+      DB_USER: user
+      DB_PASSWORD: password
+    volumes:
+      - ./etl:/app
+
+volumes:
+  postgres_data:
+
+
