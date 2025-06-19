@@ -6,8 +6,8 @@ SET search_path TO ida_datamart;
 -- Tabela de Dimensão: Tempo
 CREATE TABLE IF NOT EXISTS dim_tempo (
     id_tempo SERIAL PRIMARY KEY,
-    ano INTEGER NOT NULL,
-    mes INTEGER NOT NULL,
+    ano INT NOT NULL,
+    mes INT NOT NULL,
     data_completa DATE NOT NULL UNIQUE
 );
 
