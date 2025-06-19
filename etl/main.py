@@ -39,7 +39,7 @@ class DataExtractor:
         url = self.FILES[service_name]
         logging.info(f"Baixando dados para {service_name} da URL: {url}")
         try:
-            response = requests.get(url, verify=False)
+            response = requests.get(url, verify=True)
             response.raise_for_status()
 
             # Detectar a extensão do arquivo para decidir como ler
@@ -49,8 +49,7 @@ class DataExtractor:
                 logging.info(f"Dados CSV para {service_name} baixados e lidos com sucesso. Linhas: {len(df)}")
             elif url.lower().endswith('.ods'):
                 # Para ODS, leia o conteúdo binário e use pd.read_excel
-                # É crucial ter 'odfpy' ou 'calamine' instalado
-                df = pd.read_excel(BytesIO(response.content), engine='odf') # Ou 'calamine'
+                df = pd.read_excel(BytesIO(response.content), engine='odf') 
                 logging.info(f"Dados ODS para {service_name} baixados e lidos com sucesso. Linhas: {len(df)}")
             else:
                 logging.error(f"Formato de arquivo não suportado para a URL: {url}")
@@ -225,8 +224,8 @@ class DataLoader:
         # Resolve dimension IDs
         fact_df = self.get_or_create_dim_ids(df)
 
-    table_name = 'fato_desempenho_atendimento'
-    schema = 'ida_datamart'
+        table_name = 'fato_desempenho_atendimento'
+        schema = 'ida_datamart'
 
         try:
             fact_df.to_sql(
