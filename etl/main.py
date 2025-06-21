@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 from sqlalchemy import create_engine, text
-from io import StringIO, BytesIO 
+from io import StringIO, BytesIO
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -14,7 +14,8 @@ class DataExtractor:
     """
     BASE_URL = "https://dados.gov.br/dados/conjuntos-dados/indice-desempenho-atendimento"
     FILES = {
-         "SMP": "https://www.anatel.gov.br/dadosabertos/PDA/IDA/SMP2019.ods",
+        # URLs dos arquivos ODS para 2019. Verifique se estes links estão ativos e contêm os dados esperados.
+        "SMP": "https://www.anatel.gov.br/dadosabertos/PDA/IDA/SMP2019.ods",
         "STFC": "https://www.anatel.gov.br/dadosabertos/PDA/IDA/STFC2019.ods",
         "SCM": "https://www.anatel.gov.br/dadosabertos/PDA/IDA/SCM2019.ods"
     }
@@ -24,7 +25,8 @@ class DataExtractor:
 
     def download_data(self, service_name: str) -> pd.DataFrame:
         """
-        Baixa os dados do serviço especificado (CSV ou ODS) e retorna um DataFrame.
+        Baixa os dados do serviço especificado e retorna um DataFrame.
+        Lida com arquivos CSV e ODS.
 
         Args:
             service_name (str): Nome do serviço (SMP, STFC, SCM).
@@ -39,23 +41,26 @@ class DataExtractor:
         url = self.FILES[service_name]
         logging.info(f"Baixando dados para {service_name} da URL: {url}")
         try:
-            response = requests.get(url, verify=True)
-            response.raise_for_status()
+            # `verify=False` é usado para maior resiliência com certificados SSL,
+            # mas considere `verify=True` em produção se a segurança for crítica.
+            response = requests.get(url, verify=False)
+            response.raise_for_status() # Levanta um erro para códigos de status HTTP ruins (4xx ou 5xx)
 
-            # Detectar a extensão do arquivo para decidir como ler
             if url.lower().endswith('.csv'):
                 content = response.content.decode('utf-8')
+                # Assume que CSVs têm cabeçalho na primeira linha e delimitador ';'.
                 df = pd.read_csv(StringIO(content), sep=';')
                 logging.info(f"Dados CSV para {service_name} baixados e lidos com sucesso. Linhas: {len(df)}")
+                return df
             elif url.lower().endswith('.ods'):
-                # Para ODS, leia o conteúdo binário e use pd.read_excel
-                df = pd.read_excel(BytesIO(response.content), engine='odf') 
+                # CORREÇÃO: skiprows=8 para usar a NONA linha da planilha como cabeçalho (índice 8).
+                # Os dados iniciarão na linha 10 (índice 9).
+                df = pd.read_excel(BytesIO(response.content), engine='odf', skiprows=8)
                 logging.info(f"Dados ODS para {service_name} baixados e lidos com sucesso. Linhas: {len(df)}")
+                return df
             else:
                 logging.error(f"Formato de arquivo não suportado para a URL: {url}")
-                raise ValueError("Formato de arquivo não suportado.")
-
-            return df
+                raise ValueError("Formato de arquivo não suportado. A lógica atual suporta apenas .ods e .csv.")
         except requests.exceptions.RequestException as e:
             logging.error(f"Erro ao baixar dados para {service_name}: {e}")
             raise
@@ -68,60 +73,95 @@ class DataExtractor:
 
 class DataTransformer:
     """
-    Classe responsável por transformar os dados brutos em um formato adequado para o Data Mart.
+    Classe responsável por transformar os dados brutos em um formato adequado para o Data Mart,
+    baseado na estrutura exata da imagem fornecida.
     """
     def __init__(self):
         logging.info("Inicializando DataTransformer.")
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Realiza as transformações nos dados brutos.
-
-        Args:
-            df (pd.DataFrame): DataFrame contendo os dados brutos.
-
-        Returns:
-            pd.DataFrame: DataFrame com os dados transformados.
-        """
         if df.empty:
-            logging.warning("DataFrame de entrada está vazio. Nenhuma transformação será realizada.")
+            logging.warning("DataFrame de entrada está vazio.")
             return pd.DataFrame()
 
         logging.info("Iniciando transformação dos dados.")
-        
-        # Renomear colunas para corresponder ao Data Mart
+
+        # Etapa 1: Renomear cabeçalhos
         df = df.rename(columns={
-            'Ano': 'Ano',
-            'Mês': 'Mês',
-            'Grupo Econômico': 'Grupo Econômico',
-            'Índice de Desempenho no Atendimento': 'Taxa de Resolvidas em 5 dias úteis',
-            'Total de Demandas': 'Total de Demandas',
-            'Total Resolvidas': 'Total Resolvidas',
-            'Total Não Resolvidas': 'Total Não Resolvidas'
+            'GRUPO ECONÔMICO': 'Grupo Econômico',
+            'VARIÁVEL': 'Variavel'
         })
 
-        # Selecionar apenas as colunas de interesse
-        columns_to_keep = [
-            'Ano', 'Mês', 'Grupo Econômico',
-            'Taxa de Resolvidas em 5 dias úteis',
-            'Total de Demandas', 'Total Resolvidas', 'Total Não Resolvidas'
-        ]
-        df = df[columns_to_keep]
+        # Etapa 2: Derreter (melt) as colunas de data
+        id_vars = ['Grupo Econômico', 'Variavel']
+        if not all(col in df.columns for col in id_vars):
+            raise ValueError(f"Colunas de identificação não encontradas após renomeação. Disponíveis: {df.columns.tolist()}")
 
-        # Converter tipos de dados
-        # Converter colunas numéricas, tratando valores não numéricos como NaN
-        for col in ['Taxa de Resolvidas em 5 dias úteis', 'Total de Demandas', 'Total Resolvidas', 'Total Não Resolvidas']:
+        value_vars = [col for col in df.columns if isinstance(col, str) and col.startswith('20')]
+        for col in value_vars:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # Remover linhas com valores nulos nas colunas críticas
-        df.dropna(subset=['Ano', 'Mês', 'Grupo Econômico', 'Taxa de Resolvidas em 5 dias úteis'], inplace=True)
+        df_melted = df.melt(id_vars=id_vars, var_name='Data_Mes_Original', value_name='Valor')
+
+        # Etapa 3: Tratar datas
+        df_melted['Data'] = pd.to_datetime(df_melted['Data_Mes_Original'], format='%Y-%m', errors='coerce')
+        df_melted.dropna(subset=['Data'], inplace=True)
+        df_melted['Ano'] = df_melted['Data'].dt.year
+        df_melted['Mês'] = df_melted['Data'].dt.month
         
-        # Converter Ano e Mês para int
-        df['Ano'] = df['Ano'].astype(int)
-        df['Mês'] = df['Mês'].astype(int)
+        # Etapa 4: Pivotar para transformar as métricas em colunas
+        df_melted.dropna(subset=['Variavel', 'Grupo Econômico', 'Ano', 'Mês'], inplace=True)
+        df_final = df_melted.pivot_table(
+            index=['Ano', 'Mês', 'Grupo Econômico'],
+            columns='Variavel',
+            values='Valor',
+            aggfunc='first'
+        ).reset_index()
+
+        # --- Etapa 5: Renomear as colunas pivotadas (A CORREÇÃO PRINCIPAL ESTÁ AQUI) ---
+        # Mapeia cada nome de métrica da imagem para um nome de coluna do banco de dados.
+        df_final = df_final.rename(columns={
+            'Indicador de Desempenho no Atendimento (IDA)': 'indicador_desempenho_atendimento',
+            'Índice de Reclamações': 'indice_reclamacoes',
+            'Quantidade de acessos em serviço': 'quantidade_acessos_servico',
+            'Quantidade de reabertas': 'quantidade_reabertas',
+            'Quantidade de reclamações': 'quantidade_reclamacoes',
+            'Quantidade de reclamações no Período': 'quantidade_reclamacoes_periodo',
+            'Quantidade de Respondidas': 'quantidade_respondidas',
+            'Quantidade de Sol. Respondidas em até 5 dias': 'quantidade_sol_respondidas_5_dias',
+            'Quantidade de Sol. Respondidas no Período': 'quantidade_sol_respondidas_periodo',
+            'Taxa de Reabertas': 'taxa_reabertas',
+            'Taxa de Respondidas em 5 dias Úteis': 'taxa_respondidas_5_dias_uteis',
+            'Taxa de Respondidas no Período': 'taxa_respondidas_periodo'
+        })
+
+        # Etapa 6: Garantir que todas as colunas existam e limpar NAs
+        metric_columns = [
+            'indicador_desempenho_atendimento', 'indice_reclamacoes', 'quantidade_acessos_servico',
+            'quantidade_reabertas', 'quantidade_reclamacoes', 'quantidade_reclamacoes_periodo',
+            'quantidade_respondidas', 'quantidade_sol_respondidas_5_dias', 'quantidade_sol_respondidas_periodo',
+            'taxa_reabertas', 'taxa_respondidas_5_dias_uteis', 'taxa_respondidas_periodo'
+        ]
         
-        logging.info("Transformação dos dados concluída.")
-        return df
+        for col_name in metric_columns:
+            if col_name not in df_final.columns:
+                df_final[col_name] = pd.NA # Adiciona coluna se não existir
+            df_final[col_name] = pd.to_numeric(df_final[col_name], errors='coerce')
+
+        # Remover linhas onde a métrica principal não existe
+        df_final.dropna(subset=['indicador_desempenho_atendimento'], inplace=True)
+        
+        # Selecionar colunas finais para o Data Mart
+        final_columns = ['Ano', 'Mês', 'Grupo Econômico'] + metric_columns
+        df_final = df_final[final_columns]
+        
+        logging.info(f"Transformação dos dados concluída. DataFrame final com {len(df_final)} linhas.")
+        return df_final
+
+
+# A classe DataLoader é responsável por carregar os dados transformados na tabela fato,
+# resolvendo os IDs das dimensões. Ela foi ajustada para ser mais robusta.
+from sqlalchemy.orm import sessionmaker
 
 from sqlalchemy.orm import sessionmaker
 
@@ -136,110 +176,101 @@ class DataLoader:
         self.engine = create_engine(self.conn_str)
         logging.info(f"Conectado ao banco de dados: {db} no host: {host}")
 
-    def get_or_create_dim_ids(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _insert_or_get_id(self, table_name: str, pk_column: str, lookup_column: str, value: any, extra_params: dict = None) -> int:
         """
-        Resolve os IDs das dimensões e retorna um DataFrame pronto para carga na fato.
+        Insere um valor em uma tabela de dimensão ou retorna seu ID se já existir.
         """
-        Session = sessionmaker(bind=self.engine)
-        session = Session()
-
-        # Prepare lists for IDs
-        id_tempo_list = []
-        id_servico_list = []
-        id_grupo_list = []
-
-        for _, row in df.iterrows():
-            # dim_tempo
-            ano, mes = int(row['Ano']), int(row['Mês'])
-            res = session.execute(
-                text("SELECT id_tempo FROM ida_datamart.dim_tempo WHERE ano=:ano AND mes=:mes"),
-                {"ano": ano, "mes": mes}
-            ).fetchone()
-            if res:
-                id_tempo = res[0]
+        with self.engine.connect() as conn:
+            if table_name == 'dim_tempo':
+                query_select = text(f"SELECT {pk_column} FROM ida_datamart.dim_tempo WHERE ano=:ano AND mes=:mes")
+                result = conn.execute(query_select, {"ano": extra_params['ano'], "mes": extra_params['mes']}).scalar_one_or_none()
+                if result:
+                    return result
+                else:
+                    query_insert = text(f"INSERT INTO ida_datamart.dim_tempo (ano, mes, data_completa) VALUES (:ano, :mes, make_date(:ano, :mes, 1)) RETURNING {pk_column}")
+                    new_id = conn.execute(query_insert, {"ano": extra_params['ano'], "mes": extra_params['mes']}).scalar_one()
             else:
-                res = session.execute(
-                    text("INSERT INTO ida_datamart.dim_tempo (ano, mes, data_completa) VALUES (:ano, :mes, make_date(:ano, :mes, 1)) RETURNING id_tempo"),
-                    {"ano": ano, "mes": mes}
-                ).fetchone()
-                session.commit()
-                id_tempo = res[0]
-            id_tempo_list.append(id_tempo)
+                # Lógica genérica para outras dimensões
+                query_select = text(f"SELECT {pk_column} FROM ida_datamart.{table_name} WHERE {lookup_column} ILIKE :value")
+                result = conn.execute(query_select, {'value': value}).scalar_one_or_none()
+                if result:
+                    return result
+                else:
+                    query_insert = text(f"INSERT INTO ida_datamart.{table_name} ({lookup_column}) VALUES (:value) RETURNING {pk_column}")
+                    new_id = conn.execute(query_insert, {'value': value}).scalar_one()
 
-            # dim_servico
-            servico = row['Servico']
-            res = session.execute(
-                text("SELECT id_servico FROM ida_datamart.dim_servico WHERE nome_servico ILIKE :servico"),
-                {"servico": f"%{servico}%"}
-            ).fetchone()
-            if res:
-                id_servico = res[0]
-            else:
-                res = session.execute(
-                    text("INSERT INTO ida_datamart.dim_servico (nome_servico) VALUES (:servico) RETURNING id_servico"),
-                    {"servico": servico}
-                ).fetchone()
-                session.commit()
-                id_servico = res[0]
-            id_servico_list.append(id_servico)
+            conn.commit()
+            return new_id
 
-            # dim_grupo_economico
-            grupo = row['Grupo Econômico']
-            res = session.execute(
-                text("SELECT id_grupo_economico FROM ida_datamart.dim_grupo_economico WHERE nome_grupo_economico=:grupo"),
-                {"grupo": grupo}
-            ).fetchone()
-            if res:
-                id_grupo = res[0]
-            else:
-                res = session.execute(
-                    text("INSERT INTO ida_datamart.dim_grupo_economico (nome_grupo_economico) VALUES (:grupo) RETURNING id_grupo_economico"),
-                    {"grupo": grupo}
-                ).fetchone()
-                session.commit()
-                id_grupo = res[0]
-            id_grupo_list.append(id_grupo)
-
-        session.close()
-
-        # Build new DataFrame for fact table
-        fact_df = pd.DataFrame({
-            "id_tempo": id_tempo_list,
-            "id_servico": id_servico_list,
-            "id_grupo_economico": id_grupo_list,
-            "taxa_resolvidas_5_dias_uteis": df["Taxa de Resolvidas em 5 dias úteis"].values,
-            "total_demandas": df["Total de Demandas"].values,
-            "total_resolvidas": df["Total Resolvidas"].values,
-            "total_nao_resolvidas": df["Total Não Resolvidas"].values
-        })
-        return fact_df
-    
     def load_data(self, df: pd.DataFrame, service_name: str):
+        """
+        Carrega os dados transformados na tabela fato, resolvendo os IDs das dimensões.
+        """
         if df.empty:
-            logging.warning(f"Nenhum dado para carregar para o serviço {service_name}.")
+            logging.warning(f"DataFrame vazio para o serviço {service_name}. Nada para carregar.")
             return
 
-        df['Servico'] = service_name
+        logging.info(f"Iniciando carga de dados para o serviço: {service_name}. Total de linhas a processar: {len(df)}")
 
-        # Resolve dimension IDs
-        fact_df = self.get_or_create_dim_ids(df)
+        # --- CORREÇÃO PRINCIPAL AQUI ---
+        # Padroniza os nomes das colunas para serem compatíveis com o código e o banco
+        df.columns = [col.lower() for col in df.columns]
+        df = df.rename(columns={
+            'mês': 'mes',  # Remove o acento da coluna 'mês'
+            'grupo econômico': 'grupo_economico'
+        })
+        
+        records_for_fact = []
+        # O ID do serviço é constante para todo o DataFrame, então buscamos uma vez só.
+        id_servico = self._insert_or_get_id('dim_servico', 'id_servico', 'nome_servico', f"%{service_name}%")
 
-        table_name = 'fato_desempenho_atendimento'
-        schema = 'ida_datamart'
+        for index, row in df.iterrows():
+            try:
+                # O acesso `row['mes']` agora funcionará corretamente.
+                id_tempo = self._insert_or_get_id('dim_tempo', 'id_tempo', None, None, {'ano': row['ano'], 'mes': row['mes']})
+                id_grupo_economico = self._insert_or_get_id('dim_grupo_economico', 'id_grupo_economico', 'nome_grupo_economico', row['grupo_economico'])
+                
+                record = row.to_dict()
+                record['id_tempo'] = id_tempo
+                record['id_grupo_economico'] = id_grupo_economico
+                record['id_servico'] = id_servico
+                records_for_fact.append(record)
+
+            except Exception as e:
+                logging.error(f"Erro ao processar linha {index} para carga: {e}. Dados: {row.to_dict()}")
+                # Pular para a próxima linha se uma falhar
+                continue
+        
+        if not records_for_fact:
+            logging.warning(f"Nenhum registro válido para carregar na tabela fato para o serviço {service_name}.")
+            return
+
+        # Cria um DataFrame final com os dados enriquecidos com os IDs
+        fact_df_to_load = pd.DataFrame(records_for_fact)
+
+        # Garante que as colunas do DataFrame correspondem exatamente às colunas do banco
+        db_columns = [
+            'id_tempo', 'id_servico', 'id_grupo_economico', 'indicador_desempenho_atendimento',
+            'indice_reclamacoes', 'quantidade_acessos_servico', 'quantidade_reabertas',
+            'quantidade_reclamacoes', 'quantidade_reclamacoes_periodo', 'quantidade_respondidas',
+            'quantidade_sol_respondidas_5_dias', 'quantidade_sol_respondidas_periodo',
+            'taxa_reabertas', 'taxa_respondidas_5_dias_uteis', 'taxa_respondidas_periodo'
+        ]
+        fact_df_to_load = fact_df_to_load[db_columns]
 
         try:
-            fact_df.to_sql(
-                table_name,
+            fact_df_to_load.to_sql(
+                'fato_desempenho_atendimento',
                 self.engine,
-                schema=schema,
+                schema='ida_datamart',
                 if_exists='append',
-                index=False,
-                method='multi'
+                index=False
             )
-            logging.info(f"{len(fact_df)} linhas carregadas na tabela {schema}.{table_name} para o serviço {service_name}.")
+            logging.info(f"SUCESSO! {len(fact_df_to_load)} linhas carregadas na tabela para o serviço {service_name}.")
         except Exception as e:
-            logging.error(f"Erro ao carregar dados para {service_name}: {e}")
+            logging.error(f"Erro fatal ao carregar dados na tabela fato para {service_name}: {e}")
             raise
+
 
 def main():
     """
@@ -249,6 +280,11 @@ def main():
     db_name = os.getenv("DB_NAME", "ida_datamart")
     db_user = os.getenv("DB_USER", "user")
     db_password = os.getenv("DB_PASSWORD", "password")
+
+    # Valida se as variáveis de ambiente essenciais para a conexão com o banco de dados estão configuradas.
+    if not all([db_host, db_name, db_user, db_password]):
+        logging.error("Variáveis de ambiente para conexão com o banco de dados não estão configuradas corretamente. Verifique DB_HOST, DB_NAME, DB_USER, DB_PASSWORD.")
+        raise ValueError("Configuração de conexão com o banco de dados está incompleta.")
 
     extractor = DataExtractor()
     transformer = DataTransformer()
@@ -265,10 +301,9 @@ def main():
             logging.info(f"ETL para o serviço {service} concluído com sucesso.")
         except Exception as e:
             logging.error(f"Falha no processo ETL para o serviço {service}: {e}")
+        
 
 if __name__ == "__main__":
     logging.info("Iniciando script ETL.")
     main()
     logging.info("Script ETL finalizado.")
-
-

@@ -12,10 +12,6 @@ CREATE TABLE IF NOT EXISTS dim_tempo (
 );
 
 COMMENT ON TABLE dim_tempo IS 'Dimensão de tempo para o Data Mart de Desempenho no Atendimento.';
-COMMENT ON COLUMN dim_tempo.id_tempo IS 'Chave primária da dimensão de tempo.';
-COMMENT ON COLUMN dim_tempo.ano IS 'Ano da ocorrência.';
-COMMENT ON COLUMN dim_tempo.mes IS 'Mês da ocorrência.';
-COMMENT ON COLUMN dim_tempo.data_completa IS 'Data completa da ocorrência (primeiro dia do mês).';
 
 -- Tabela de Dimensão: Serviço
 CREATE TABLE IF NOT EXISTS dim_servico (
@@ -24,8 +20,6 @@ CREATE TABLE IF NOT EXISTS dim_servico (
 );
 
 COMMENT ON TABLE dim_servico IS 'Dimensão de serviço para o Data Mart de Desempenho no Atendimento.';
-COMMENT ON COLUMN dim_servico.id_servico IS 'Chave primária da dimensão de serviço.';
-COMMENT ON COLUMN dim_servico.nome_servico IS 'Nome do serviço (SMP, STFC, SCM).';
 
 -- Tabela de Dimensão: Grupo Econômico
 CREATE TABLE IF NOT EXISTS dim_grupo_economico (
@@ -34,40 +28,44 @@ CREATE TABLE IF NOT EXISTS dim_grupo_economico (
 );
 
 COMMENT ON TABLE dim_grupo_economico IS 'Dimensão de grupo econômico para o Data Mart de Desempenho no Atendimento.';
-COMMENT ON COLUMN dim_grupo_economico.id_grupo_economico IS 'Chave primária da dimensão de grupo econômico.';
-COMMENT ON COLUMN dim_grupo_economico.nome_grupo_economico IS 'Nome do grupo econômico.';
 
 -- Tabela Fato: Desempenho de Atendimento
+-- CORREÇÃO: Removido o hífen inicial e adicionado "IF NOT EXISTS" para robustez.
 CREATE TABLE IF NOT EXISTS fato_desempenho_atendimento (
     id_fato SERIAL PRIMARY KEY,
     id_tempo INTEGER NOT NULL,
     id_servico INTEGER NOT NULL,
     id_grupo_economico INTEGER NOT NULL,
-    taxa_resolvidas_5_dias_uteis NUMERIC(5,2),
-    total_demandas INTEGER,
-    total_resolvidas INTEGER,
-    total_nao_resolvidas INTEGER,
+    indicador_desempenho_atendimento NUMERIC(10, 4),
+    indice_reclamacoes NUMERIC(10, 4),
+    quantidade_acessos_servico NUMERIC(15, 0),
+    quantidade_reabertas NUMERIC(15, 0),
+    quantidade_reclamacoes NUMERIC(15, 0),
+    quantidade_reclamacoes_periodo NUMERIC(15, 0),
+    quantidade_respondidas NUMERIC(15, 0),
+    quantidade_sol_respondidas_5_dias NUMERIC(15, 0),
+    quantidade_sol_respondidas_periodo NUMERIC(15, 0),
+    taxa_reabertas NUMERIC(10, 4),
+    taxa_respondidas_5_dias_uteis NUMERIC(10, 4),
+    taxa_respondidas_periodo NUMERIC(10, 4),
     FOREIGN KEY (id_tempo) REFERENCES dim_tempo (id_tempo),
     FOREIGN KEY (id_servico) REFERENCES dim_servico (id_servico),
     FOREIGN KEY (id_grupo_economico) REFERENCES dim_grupo_economico (id_grupo_economico)
 );
 
-COMMENT ON TABLE fato_desempenho_atendimento IS 'Tabela fato com os dados de desempenho no atendimento.';
-COMMENT ON COLUMN fato_desempenho_atendimento.id_fato IS 'Chave primária da tabela fato.';
-COMMENT ON COLUMN fato_desempenho_atendimento.id_tempo IS 'Chave estrangeira para a dimensão de tempo.';
-COMMENT ON COLUMN fato_desempenho_atendimento.id_servico IS 'Chave estrangeira para a dimensão de serviço.';
-COMMENT ON COLUMN fato_desempenho_atendimento.id_grupo_economico IS 'Chave estrangeira para a dimensão de grupo econômico.';
-COMMENT ON COLUMN fato_desempenho_atendimento.taxa_resolvidas_5_dias_uteis IS 'Taxa de demandas resolvidas em 5 dias úteis.';
-COMMENT ON COLUMN fato_desempenho_atendimento.total_demandas IS 'Número total de demandas.';
-COMMENT ON COLUMN fato_desempenho_atendimento.total_resolvidas IS 'Número total de demandas resolvidas.';
-COMMENT ON COLUMN fato_desempenho_atendimento.total_nao_resolvidas IS 'Número total de demandas não resolvidas.';
-
--- Inserção de dados nas tabelas de dimensão, se ainda não existirem
-INSERT INTO dim_servico (nome_servico) VALUES
-('Serviço Móvel Pessoal – SMP'),
-('Serviço Telefônico Fixo Comutado – STFC'),
-('Serviço de Comunicação Multimídia – SCM')
-ON CONFLICT (nome_servico) DO NOTHING;
+COMMENT ON TABLE fato_desempenho_atendimento IS 'Tabela fato com os dados de desempenho no atendimento, com todas as métricas da fonte.';
+COMMENT ON COLUMN fato_desempenho_atendimento.indicador_desempenho_atendimento IS 'Indicador de Desempenho no Atendimento (IDA).';
+COMMENT ON COLUMN fato_desempenho_atendimento.indice_reclamacoes IS 'Índice de Reclamações.';
+COMMENT ON COLUMN fato_desempenho_atendimento.quantidade_acessos_servico IS 'Quantidade de acessos em serviço.';
+COMMENT ON COLUMN fato_desempenho_atendimento.quantidade_reabertas IS 'Quantidade de solicitações reabertas.';
+COMMENT ON COLUMN fato_desempenho_atendimento.quantidade_reclamacoes IS 'Quantidade de reclamações recebidas.';
+COMMENT ON COLUMN fato_desempenho_atendimento.quantidade_reclamacoes_periodo IS 'Quantidade de reclamações no período.';
+COMMENT ON COLUMN fato_desempenho_atendimento.quantidade_respondidas IS 'Quantidade de solicitações respondidas.';
+COMMENT ON COLUMN fato_desempenho_atendimento.quantidade_sol_respondidas_5_dias IS 'Quantidade de solicitações respondidas em até 5 dias.';
+COMMENT ON COLUMN fato_desempenho_atendimento.quantidade_sol_respondidas_periodo IS 'Quantidade de solicitações respondidas no período.';
+COMMENT ON COLUMN fato_desempenho_atendimento.taxa_reabertas IS 'Taxa de Reabertas.';
+COMMENT ON COLUMN fato_desempenho_atendimento.taxa_respondidas_5_dias_uteis IS 'Taxa de Respondidas em 5 dias Úteis.';
+COMMENT ON COLUMN fato_desempenho_atendimento.taxa_respondidas_periodo IS 'Taxa de Respondidas no Período.';
 
 
 -- View para a taxa de variação e a diferença entre a taxa de variação média e individual
@@ -76,13 +74,15 @@ WITH ida_mensal AS (
     SELECT
         dt.data_completa AS mes,
         dge.nome_grupo_economico AS grupo_economico,
-        AVG(fda.taxa_resolvidas_5_dias_uteis) AS ida_mensal_medio
+        AVG(fda.taxa_respondidas_5_dias_uteis) AS ida_mensal_medio
     FROM
         ida_datamart.fato_desempenho_atendimento fda
     JOIN
         ida_datamart.dim_tempo dt ON fda.id_tempo = dt.id_tempo
     JOIN
         ida_datamart.dim_grupo_economico dge ON fda.id_grupo_economico = dge.id_grupo_economico
+    WHERE
+        fda.taxa_respondidas_5_dias_uteis IS NOT NULL
     GROUP BY
         dt.data_completa, dge.nome_grupo_economico
 ),
@@ -93,7 +93,7 @@ taxa_variacao AS (
         ida_mensal_medio,
         LAG(ida_mensal_medio, 1, 0) OVER (PARTITION BY grupo_economico ORDER BY mes) AS ida_mes_anterior,
         CASE
-            WHEN LAG(ida_mensal_medio, 1, 0) OVER (PARTITION BY grupo_economico ORDER BY mes) = 0 THEN NULL -- Evita divisão por zero
+            WHEN LAG(ida_mensal_medio, 1, 0) OVER (PARTITION BY grupo_economico ORDER BY mes) = 0 THEN NULL
             ELSE ((ida_mensal_medio - LAG(ida_mensal_medio, 1, 0) OVER (PARTITION BY grupo_economico ORDER BY mes)) / LAG(ida_mensal_medio, 1, 0) OVER (PARTITION BY grupo_economico ORDER BY mes)) * 100
         END AS taxa_variacao_individual
     FROM
@@ -129,14 +129,11 @@ SELECT
     MAX(CASE WHEN p.grupo_economico = 'TIM' THEN p.diferenca_da_media END) AS "TIM",
     MAX(CASE WHEN p.grupo_economico = 'VIVO' THEN p.diferenca_da_media END) AS "VIVO",
     MAX(CASE WHEN p.grupo_economico = 'NEXTEL' THEN p.diferenca_da_media END) AS "NEXTEL",
-    MAX(CASE WHEN p.grupo_economico = 'SKY' THEN p.diferenca_da_media END) AS "SKY"
+    MAX(CASE WHEN p.grupo_economico = 'SKY' THEN p.diferenca_da_media END) AS "SKY",
+    MAX(CASE WHEN p.grupo_economico = 'SERCOMTEL' THEN p.diferenca_da_media END) AS "SERCOMTEL"
 FROM
     pivot_grupos p
 GROUP BY
     p.mes, p.taxa_variacao_media
 ORDER BY
     p.mes;
-
-COMMENT ON VIEW ida_datamart.ida_taxa_variacao_pivotada IS 'View que calcula a taxa de variação mensal da "Taxa de Resolvidas em 5 dias úteis" para cada grupo econômico e a diferença em relação à taxa de variação média, com os grupos econômicos pivotados.';
-
-
